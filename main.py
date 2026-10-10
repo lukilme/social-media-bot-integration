@@ -15,7 +15,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from logs import Logger
 
 
-WAIT_SPEED = 1.0
+WAIT_SPEED = 0.5
 
 
 logger = Logger.get_logger(__name__)
@@ -46,16 +46,10 @@ def delete_cache(driver):
     esperar(2)
     driver.close()
     driver.switch_to.window(driver.window_handles[0])
-
-
-def deletar_comentario_atual(driver, wait, artigo, overflow_menu):
+def deletar_comentario_atual(driver, wait, overflow_menu) -> bool:
     try:
-        driver.execute_script(
-            "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
-            artigo,
-        )
-        esperar(1)
 
+        # 1. Abre o menu de três pontos
         driver.execute_script(
             """
             const menu = arguments[0];
@@ -70,37 +64,61 @@ def deletar_comentario_atual(driver, wait, artigo, overflow_menu):
             overflow_menu,
         )
         logger.info("[1/3] Menu de opções aberto.")
-        esperar(1)
+        esperar(0.5)  # Tempo para o menu renderizar
 
-        try:
-            opcao_apagar = wait.until(
-                EC.element_to_be_clickable(
-                    (
-                        By.CSS_SELECTOR,
-                        "li.delete-comment-menu-button, faceplate-tracker[noun='delete']",
-                    )
-                )
+        # 2. Localiza a opção visível e clica nela pelo WebDriver.
+        opcao_deletar = wait.until(
+            lambda current_driver: current_driver.execute_script(
+                """
+                function findVisibleDeleteOption(root) {
+                    const options = root.querySelectorAll(
+                        'faceplate-tracker[noun="delete"], li.delete-comment-menu-button'
+                    );
+                    for (const option of options) {
+                        const style = window.getComputedStyle(option);
+                        if (
+                            option.getClientRects().length > 0 &&
+                            style.visibility !== 'hidden' &&
+                            style.display !== 'none'
+                        ) {
+                            return option.querySelector(
+                                'button, [role="menuitem"], div.cursor-pointer'
+                            ) || option;
+                        }
+                    }
+
+                    for (const node of root.querySelectorAll('*')) {
+                        if (node.shadowRoot) {
+                            const option = findVisibleDeleteOption(node.shadowRoot);
+                            if (option) return option;
+                        }
+                    }
+                    return null;
+                }
+
+                return findVisibleDeleteOption(document);
+                """
             )
-            opcao_apagar.click()
-        except (TimeoutException, NoSuchElementException):
-            opcao_deletar = driver.find_element(
-                By.XPATH, "//span[contains(text(), 'Delete comment')]"
-            )
-            driver.execute_script("arguments[0].click();", opcao_deletar)
+        )
+        opcao_deletar.click()
 
         logger.info("[2/3] Opção 'Delete comment' clicada.")
+        esperar(0.5)
 
+        # 3. Confirmação do popup de exclusão
         btn_confirmar_delete = wait.until(
             EC.element_to_be_clickable((By.ID, "deleteBtn"))
         )
         btn_confirmar_delete.click()
+        wait.until(EC.invisibility_of_element_located((By.ID, "deleteBtn")))
         logger.info("[3/3] Confirmação efetuada: comentário deletado.")
 
-        esperar(2)
+        esperar(0.5)
+        return True
 
     except Exception:
         logger.exception("Erro ao tentar deletar o comentário.")
-
+        return False
 
 def processar_artigos(driver):
     processados = set()
@@ -121,21 +139,25 @@ def processar_artigos(driver):
                 "arguments[0].scrollIntoView({behavior: 'smooth', block: 'center'});",
                 artigo,
             )
-            esperar(1)
+            esperar(0.5)
 
             try:
                 overflow_menu = artigo.find_element(
                     By.CSS_SELECTOR, "shreddit-overflow-menu"
                 )
 
-                deletar_comentario_atual(driver, wait, artigo, overflow_menu)
-
-                driver.execute_script(
-                    "arguments[0].style.border = '3px solid #00ff00';",
-                    artigo,
+                deletado = deletar_comentario_atual(
+                    driver, wait, overflow_menu
                 )
+                if deletado:
+                    driver.execute_script(
+                        "arguments[0].style.border = '3px solid #00ff00';",
+                        artigo,
+                    )
+                else:
+                    logger.error("Comentário não confirmado como deletado.")
                 processados.add(artigo_id)
-                esperar(2)
+                esperar(0.5)
 
             except Exception:
                 logger.exception("Não foi possível clicar no menu deste artigo.")
